@@ -1995,7 +1995,7 @@ function validateIntroQuestions() {
 }
 function introQuestionFields() {
   validateIntroQuestions();
-  return INTRO_QUESTIONS.map(q => `<label class="field" for="intro_${q.id}">${escape(q.label)}${q.required ? ' (required)' : ' (optional)'}</label>${q.type === 'select'
+  return INTRO_QUESTIONS.map(q => `<label class="field" for="intro_${q.id}">${escape(q.label)}${q.required ? ' (required)' : ''}</label>${q.type === 'select'
     ? `<select id="intro_${q.id}" ${q.required ? 'required' : ''}><option value="">Select an answer</option>${q.options.map(option => `<option value="${escape(option)}">${escape(option)}</option>`).join('')}</select>`
     : `<input type="text" id="intro_${q.id}" maxlength="500" autocomplete="off" ${q.required ? 'required' : ''}>`}`).join('');
 }
