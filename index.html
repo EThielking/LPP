@@ -41,9 +41,10 @@ body.listening{background:var(--bg)}.listening h1{color:#c3c6dc}.listening .mute
 const CONFIG = {
   DATA_ENDPOINT: "https://script.google.com/macros/s/AKfycbzVG1_CFulOXq9kMSNq2fL3HhpQR5BPU-AsGdUhFSgSVb5eZlYl7HQZ1BqR4BBw9c4CgA/exec",
   STUDY_NAME: "LPP audiobook study",
-  APP_VERSION: "lpp-single-html-1.3",
+  APP_VERSION: "lpp-single-html-1.4",
   CONTACT_EMAIL: "esther.thielking@gmail.com",
-  MAX_REPORT_SECONDS: 180,
+  // Total response time per probe, shared by recall, attention, sleepiness and corrections
+  MAX_REPORT_SECONDS: 120,
   REQUIRE_FULLSCREEN: true,
   // Change either true to false to HIDE that skip option and REQUIRE the step.
   // Microphone permission is always required, even when its quality check is skipped.
@@ -73,11 +74,21 @@ const CONFIG = {
    Participant code is collected separately and is always required. */
 const INTRO_QUESTIONS = [
   {id: 'native_english', label: 'Are you a native speaker of English?',
-    type: 'select', required: false, options: ['Yes', 'No', 'Prefer not to say']},
+    type: 'select', required: true, options: ['Yes', 'No', 'Prefer not to say']},
   {id: 'english_level', label: 'How would you describe your English proficiency?',
-    type: 'select', required: false, options: ['Beginner', 'Intermediate', 'Advanced', 'Fluent', 'Prefer not to say']},
+    type: 'select', required: true, options: ['Beginner', 'Intermediate', 'Advanced', 'Fluent', 'Prefer not to say']},
   {id: 'little_prince_familiarity', label: 'Have you read or listened to The Little Prince before?',
-    type: 'select', required: false, options: ['No', 'Some of it', 'All of it', 'Not sure', 'Prefer not to say']}
+    type: 'select', required: true, options: ['No', 'Some of it', 'All of it', 'Not sure', 'Prefer not to say']},
+  {id: 'has_read_little_prince', label: 'Have you ever read any of The Little Prince, in any language?',
+    type: 'select', required: true, options: ['Yes', 'No']},
+  // showIf displays a follow-up only for the specified answer to an earlier question
+  {id: 'little_prince_last_read', label: 'How long ago did you most recently read The Little Prince?',
+    type: 'text', required: true, placeholder: 'For example, about 2 years ago',
+    showIf: {id: 'has_read_little_prince', equals: 'Yes'}},
+  {id: 'little_prince_amount_read', label: 'How much of The Little Prince did you read on that most recent occasion?',
+    type: 'select', required: true,
+    options: ['A few pages', 'Less than half', 'About half', 'More than half, but not all', 'The whole book', 'I don’t remember'],
+    showIf: {id: 'has_read_little_prince', equals: 'Yes'}}
 ];
 /* 3. PREPARED STIMULI — LPP_web.m fills this from the MATLAB timing and question
    files. Re-export to add sections; never guess probe times or regenerate cues.
@@ -931,7 +942,7 @@ async function checkEndpoint(config) {
   let receipt;
   try { receipt=await confirmedPost(endpointURL(config),{v:1,action:'health'}); }
   catch(error) { throw new Error('Google connection check failed. Update Code.gs and deploy a New version of the existing deployment, then retry. '+error.message); }
-  if(receipt.version!==2 || !receipt.capabilities?.includes('audio_direct') || !receipt.capabilities?.includes('audit')) {
+  if(receipt.version!==2 || !['audio_direct','audit','probe_timeouts'].every(capability => receipt.capabilities?.includes(capability))) {
     throw new Error('The Google collector needs its matching Code.gs update. Update the existing Apps Script deployment before running participants.');
   }
   return receipt;
@@ -1518,7 +1529,8 @@ function screenWelcome() {
     <p>You will listen to ${manifest ? manifest.sections.length : 'the prepared'} section${manifest?.sections.length === 1 ? '' : 's'} of <em>The Little Prince</em>. At each interruption, recall the preceding phrase, report your attention, and rate your sleepiness.</p>
     <p><strong>Keep your eyes closed for the entire listening section, including every spoken response.</strong> Open them only when you are told the section is complete.</p>
     <p>Use a laptop or desktop, headphones, and a quiet room. Rest your hands by the <kbd>Space</kbd> bar and locate <kbd>←</kbd> before closing your eyes.</p>
-    <p>After each section, answer four comprehension questions and rate your confidence in each answer.</p></div>
+    <p>After each section, answer four comprehension questions and rate your confidence in each answer.</p>
+    <p><strong>Each section must be completed in one sitting, including its comprehension questions.</strong> Take breaks after the questions, before starting the next section.</p></div>
     <figure class="cover"><img src="${COVER_IMAGE}" width="624" height="1000" alt="The Little Prince cover, showing the prince standing on his planet against a dark blue sky."></figure>
     <div class="panel setup-panel"><h2>Before you begin</h2>
     <div class="step"><span class="step-number">1</span><div><strong>Microphone check</strong><p>Record a sentence and listen back.</p></div></div>
@@ -1628,6 +1640,7 @@ function screenInstructions() {
   setListening(false);
   flow(`<p class="breadcrumb">Instructions</p><h1>Listening and responding</h1>
     <p>Focus on the story so you can recall the words before each interruption and answer the comprehension questions after each section.</p>
+    <p><strong>Complete each section and its comprehension questions in one sitting.</strong> Take breaks after the questions, before beginning the next section.</p>
     ${notice('<strong>Your eyes must remain closed throughout the entire listening section, including the bell, cue, recall, attention report, and sleepiness rating.</strong> Keep your hands ready by the Space bar, with the left arrow within reach. Open your eyes only when the spoken message tells you the section is complete.')}
     <p>At an interruption, the story stops. You will hear a <strong>bell</strong>, then a <strong>cue</strong> replaying the start of the preceding phrase. Wait for the cue to finish, then give these three reports:</p>
     <div class="panel">
@@ -1635,6 +1648,7 @@ function screenInstructions() {
       <div class="keys"><span class="step-number">2</span><div><strong>Say “on-task,” “mind-wandering,” or “mind-blanking.”</strong><p>Report your attention <strong>immediately before the bell</strong>. Then press <kbd>Space</kbd>.</p></div></div>
       <div class="keys"><span class="step-number">3</span><div><strong>Say your sleepiness rating, from 1 to 9.</strong><p>Use the scale below to report how sleepy you felt just before the bell. Then press <kbd>Space</kbd>.</p></div></div>
     </div>
+    <p>You have up to ${CONFIG.MAX_REPORT_SECONDS} seconds in total for the three spoken reports at each probe. If time runs out, your recording is saved and the study continues.</p>
     <div class="control-notes"><p><kbd>Space</kbd> moves to the next report. Speak first, then press and release it once. You will hear a short confirmation tone.</p>
     <p><kbd>←</kbd> is <strong>Back</strong>. If you press Space too soon, press the left arrow to return to the previous report. A spoken prompt tells you what to repeat. You can correct the last sleepiness report after the story resumes, until the next bell. At the end of a section, you can go back until you select Begin questions. Keep your eyes closed during corrections.</p>
     <p>The study opens full screen when you begin a listening section. <kbd>Esc</kbd> exits full screen; the study continues. Press <kbd>Q</kbd> to stop the session and save what you have completed.</p></div>
@@ -1709,11 +1723,10 @@ async function startPractice() {
     if (run !== token || !practice) return;
     reportIndex=0; reportBusy=false; waitRelease=held.has('Space');
     resetReportTake(); captureCycle=null;
-    state='starting'; await beginCapture();
+    state='starting'; await beginReportCapture();
     if (run !== token || !practice) return;
     state='reports'; practiceDone=finishPractice;
     listenScreen('Give your three reports.','Recall · Attention · Sleepiness. Speak, then Space. Keep your eyes closed.');
-    armReportTimeout();
   });
 }
 
@@ -1732,14 +1745,81 @@ async function cancelPractice() {
   screenInstructions();
 }
 
+// Back uses the remaining response time rather than granting a new 120 seconds
+let reportClock = null;
+let reportCaptureMaxFrames = Infinity;
+let reportTemplate = null;
+function reportTimeLeft() {
+  if (!reportClock) return CONFIG.MAX_REPORT_SECONDS * 1000;
+  return Math.max(0, reportClock.remainingMs - (reportClock.startedAt === null ? 0 : performance.now() - reportClock.startedAt));
+}
+function pauseReportClock() {
+  clearTimeout(reportTimeout);
+  if (reportClock) {
+    reportClock.remainingMs = reportTimeLeft();
+    reportClock.startedAt = null;
+  }
+}
 function armReportTimeout() {
   clearTimeout(reportTimeout);
-  const retainedMs = reportPrefix.length / (ctx?.sampleRate || 44100) * 1000;
-  const remainingMs = Math.max(0, CONFIG.MAX_REPORT_SECONDS * 1000 - retainedMs);
+  if (!reportClock) reportClock = {remainingMs: CONFIG.MAX_REPORT_SECONDS * 1000, startedAt: null, expired: false, expiring: false};
+  if (reportClock.startedAt === null) reportClock.startedAt = performance.now();
+  const clock = reportClock;
   reportTimeout = setTimeout(() => {
-    if (practice) void safe(cancelPractice)();
-    else void abortStudy('recording_safety_limit', `The recording reached the ${CONFIG.MAX_REPORT_SECONDS}-second safety limit. Your partial response will be preserved.`);
-  }, remainingMs);
+    if (clock !== reportClock || clock.startedAt === null || clock.expiring || session?.endISO) return;
+    clock.expired = true;
+    if (backBusy) window.speechSynthesis?.cancel();
+    else void safe(expireReport)();
+  }, reportTimeLeft());
+}
+async function beginReportCapture() {
+  armReportTimeout();
+  reportCaptureMaxFrames = Math.floor(reportTimeLeft() * ctx.sampleRate / 1000);
+  if (reportCaptureMaxFrames < 1) { reportClock.expired = true; return; }
+  await beginCapture();
+}
+async function expireReport() {
+  const clock = reportClock;
+  if (!clock || clock.expiring || backBusy || session?.endISO || (!practice && !currentTrial)) return;
+  clock.expired = true;
+  clock.expiring = true;
+  pauseReportClock();
+  const own = ++token;
+  state = 'saving';
+  reportBusy = true;
+  backQueued = false;
+  stopAudio();
+  let result;
+  if (captureCycle) result = await finishReportTake();
+  else {
+    const pcm = reportPrefix.length ? reportPrefix : reportTemplate.rawPCM.slice(0, 1);
+    result = reportResult(pcm, acceptedReportMarkers, reportTemplate);
+  }
+  if (own !== token || session?.endISO) return;
+  pendingEditableProbe = null;
+  pendingPracticeResult = null;
+  if (practice) {
+    practiceResult = result;
+    practice = false;
+    practicePassed = false;
+    state = 'practice_timeout';
+    reportBusy = false;
+    await speak('The practice response time is up. You can open your eyes now and try again.');
+    if (own !== token) return;
+    setListening(false);
+    const url = URL.createObjectURL(result.blob);
+    objectURLs.push(url);
+    flow(`<h1>Practice time is up</h1><p>You have ${CONFIG.MAX_REPORT_SECONDS} seconds in total for the three spoken reports. Listen to what was recorded, then try again. Say each answer before pressing Space.</p><audio controls src="${url}"></audio><button id="practiceAgain">Practise again</button>`);
+    bind('practiceAgain', startPractice);
+    return;
+  }
+  Object.assign(currentTrial, {responseTimedOut: true, responseLimit_sec: CONFIG.MAX_REPORT_SECONDS});
+  event('probe_response_timeout', {acceptedReportCount: result.markerSampleIndices.length, responseLimit_sec: CONFIG.MAX_REPORT_SECONDS});
+  await saveProbe(result, 'partial');
+  if (!alive(own)) return;
+  reportBusy = false;
+  probeIndex++;
+  await nextProbe();
 }
 /* Response correction keeps three accepted boundaries in one canonical WAV.
  * Raw PCM stays in memory only; local/server JSON never contains these samples.
@@ -1771,6 +1851,10 @@ function cutReportTake(pcm, markers, target, rate) {
   return {pcm: pcm.slice(0, end), markers: kept, removedSamples: pcm.length - end};
 }
 function resetReportTake() {
+  clearTimeout(reportTimeout);
+  reportClock = null;
+  reportCaptureMaxFrames = Infinity;
+  reportTemplate = null;
   reportPrefix = new Float32Array(0);
   acceptedReportMarkers = [];
   backQueued = false;
@@ -1794,7 +1878,13 @@ function assembleReportTake(result) {
   return reportResult(combinePCM(reportPrefix, result.rawPCM), acceptedReportMarkers, result);
 }
 async function finishReportTake() {
-  return assembleReportTake(await finishCapture({embed: false}));
+  const captured = await finishCapture({embed: false});
+  const pcm = captured.rawPCM.slice(0, Math.min(captured.rawPCM.length, reportCaptureMaxFrames));
+  const combined = combinePCM(reportPrefix, pcm);
+  const markers = reportClock?.expired ? acceptedReportMarkers.filter(i => i < combined.length) : acceptedReportMarkers;
+  const result = reportResult(combined, markers, captured);
+  reportTemplate = result;
+  return result;
 }
 function sealPendingProbe() {
   if (!pendingEditableProbe) return;
@@ -1807,7 +1897,8 @@ function correctionPrompt(index) {
   return ['Recall the phrase.', 'Say “on-task,” “mind-wandering,” or “mind-blanking.”', 'Say your sleepiness rating, from 1 to 9.'][index];
 }
 function correctionAvailable() {
-  if (abortBusy || session?.endISO) return false;
+  if (abortBusy || session?.endISO || reportClock?.expired || reportClock?.expiring) return false;
+  if (reportClock?.startedAt === null && reportTimeLeft() <= 0) return false;
   if (['reports', 'report_tail', 'saving'].includes(state)) return reportIndex > 0;
   if (pendingEditableProbe && ['story', 'questions_intro'].includes(state)) return true;
   return state === 'practice_done' && !practicePassed && Boolean(pendingPracticeResult);
@@ -1826,7 +1917,7 @@ async function goBackReport() {
   reportBusy = true;
   state = 'back'; // Block Space before awaiting a recorder stop or local write.
   const own = ++token;
-  clearTimeout(reportTimeout);
+  armReportTimeout();
   let result, target;
   try {
     if (previousState === 'practice_done') {
@@ -1858,6 +1949,7 @@ async function goBackReport() {
     }
     if (own !== token || session?.endISO) return;
     if (result.partial) throw Error('The recording was interrupted; this response cannot be corrected safely.');
+    reportTemplate = result;
     const cut = cutReportTake(result.rawPCM, result.markerSampleIndices, target, result.sampleRate);
     reportPrefix = cut.pcm;
     acceptedReportMarkers = cut.markers;
@@ -1882,31 +1974,35 @@ async function goBackReport() {
       currentTrial.acceptedReportCount = cut.markers.length;
       currentTrial.interruptedDuringCorrection = true;
       await saveProbe(prefixResult, 'partial');
-      if (own !== token || session?.endISO) return;
+      if (own !== token || session?.endISO || reportClock?.expired) return;
     }
     listenScreen(correctionPrompt(target), 'Keep your eyes closed. Speak, then press Space.');
     try { await speak('Back. Close your eyes. ' + correctionPrompt(target) + ' Speak, then press Space.'); }
-    catch (error) { if (own === token) throw error; return; }
-    if (own !== token || session?.endISO) return;
-    await beginCapture();
-    if (own !== token || session?.endISO) return;
+    catch (error) { if (own === token && !reportClock?.expired) throw error; return; }
+    if (own !== token || session?.endISO || reportClock?.expired) return;
+    await beginReportCapture();
+    if (own !== token || session?.endISO || reportClock?.expired) return;
     state = 'reports';
     reportBusy = false;
     waitRelease = held.has('Space');
     armReportTimeout();
   } finally {
     backBusy = false;
+    if (reportClock?.expired && !reportClock.expiring && !session?.endISO) await expireReport();
   }
 }
 
 
 async function markReport() {
   if (reportBusy || state !== 'reports' || waitRelease) return;
+  if (reportClock?.expired || reportTimeLeft() <= 0) { await expireReport(); return; }
   reportBusy = true;
   const own = token;
   const marker = await recorder.mark(ctx.currentTime);
   if (own !== token) return;
+  if (reportTimeLeft() <= 0) { await expireReport(); return; }
   const sampleIndex = reportPrefix.length + marker.sampleIndex;
+  if (marker.sampleIndex >= reportCaptureMaxFrames) { await expireReport(); return; }
   const previous = acceptedReportMarkers.at(-1);
   if (previous !== undefined && sampleIndex <= previous) throw Error('Response markers are not in chronological order.');
   acceptedReportMarkers.push(sampleIndex);
@@ -1917,6 +2013,7 @@ async function markReport() {
     captureSampleIndex: marker.sampleIndex
   });
   reportIndex++;
+  if (reportIndex === 3) pauseReportClock();
   await play(beepBuffer(), {when: ctx.currentTime});
   if (own !== token || state !== 'reports') return;
   reportBusy = false;
@@ -1989,18 +2086,42 @@ function validateIntroQuestions() {
   for (const q of INTRO_QUESTIONS) {
     if (!/^[a-z][a-z0-9_]{0,63}$/.test(q.id || '') || seen.has(q.id) || !q.label || !['select','text'].includes(q.type) || typeof q.required !== 'boolean') throw Error('Each introductory question needs a unique id, label, supported type, and required flag.');
     if (q.type === 'select' && (!Array.isArray(q.options) || !q.options.length || q.options.some(option => typeof option !== 'string' || !option) || new Set(q.options).size !== q.options.length)) throw Error('Select questions need unique, nonempty options.');
+    if (q.showIf) {
+      const parent = INTRO_QUESTIONS.find(question => question.id === q.showIf.id);
+      if (!seen.has(q.showIf.id) || typeof q.showIf.equals !== 'string' || !parent?.options?.includes(q.showIf.equals)) throw Error('A follow-up must name an earlier select question and one of its answers.');
+    }
     seen.add(q.id);
   }
 }
 function introQuestionFields() {
   validateIntroQuestions();
-  return INTRO_QUESTIONS.map(q => `<label class="field" for="intro_${q.id}">${escape(q.label)}${q.required ? ' (required)' : ' (optional)'}</label>${q.type === 'select'
-    ? `<select id="intro_${q.id}" ${q.required ? 'required' : ''}><option value="">Select an answer</option>${q.options.map(option => `<option value="${escape(option)}">${escape(option)}</option>`).join('')}</select>`
-    : `<input type="text" id="intro_${q.id}" maxlength="500" autocomplete="off" ${q.required ? 'required' : ''}>`}`).join('');
+  return INTRO_QUESTIONS.map(q => `<div id="intro_field_${q.id}" ${q.showIf ? 'hidden' : ''}><label class="field" for="intro_${q.id}">${escape(q.label)}</label>${q.type === 'select'
+    ? `<select id="intro_${q.id}" ${q.required ? 'required' : ''} ${q.showIf ? 'disabled' : ''}><option value="">Select an answer</option>${q.options.map(option => `<option value="${escape(option)}">${escape(option)}</option>`).join('')}</select>`
+    : `<input type="text" id="intro_${q.id}" maxlength="500" autocomplete="off" placeholder="${escape(q.placeholder || '')}" ${q.required ? 'required' : ''} ${q.showIf ? 'disabled' : ''}>`}</div>`).join('');
+}
+function introQuestionVisible(q) {
+  if (!q.showIf) return true;
+  const parent = $('intro_' + q.showIf.id);
+  return Boolean(parent && !parent.disabled && parent.value === q.showIf.equals);
+}
+function updateIntroQuestionVisibility() {
+  for (const q of INTRO_QUESTIONS) {
+    const visible = introQuestionVisible(q), input = $('intro_' + q.id);
+    $('intro_field_' + q.id).hidden = !visible;
+    input.disabled = !visible;
+    input.required = visible && q.required;
+    if (!visible) input.value = '';
+  }
+}
+function bindIntroQuestions() {
+  for (const q of INTRO_QUESTIONS) $('intro_' + q.id).onchange = updateIntroQuestionVisibility;
+  updateIntroQuestionVisibility();
 }
 function readIntroAnswers() {
+  updateIntroQuestionVisibility();
   const answers = {};
   for (const q of INTRO_QUESTIONS) {
+    if (!introQuestionVisible(q)) { answers[q.id] = null; continue; }
     const value = $('intro_' + q.id).value.trim();
     if (q.required && !value) throw Error('Please answer: ' + q.label);
     if (value && q.type === 'select' && !q.options.includes(value)) throw Error('Please select one of the listed answers: ' + q.label);
@@ -2018,7 +2139,8 @@ function sessionIdentity(pid, startedAt = new Date()) {
 function screenStudyGate() {
   state = 'gate';
   const ready = manifest && (endpoint || localRehearsal);
-  flow(`<p class="breadcrumb">01 · Equipment &nbsp; / &nbsp; 02 · Practice &nbsp; / &nbsp; <strong>03 · Listen</strong></p><h1>${ready?'Begin the study':'Equipment check complete'}</h1><p>${ready?'Keep your headphones on. Rest your hands by the Space bar, locate the left arrow, and find a comfortable position. Keep your eyes closed throughout each listening section and every spoken report.':'The full study still needs its original audio, probe timing files, cues, questions, and upload destination.'}</p>${manifest?notice(`${manifest.sections.length} listening part${manifest.sections.length === 1 ? '' : 's'}, in order. Approximately ${Math.ceil(manifest.sections.reduce((sum,s)=>sum+s.probes.at(-1).effectiveProbeTime_sec,0)/60)} minutes of story, plus spoken reports and questions.`):notice('Researcher: run LPP_web.m once to add your existing stimuli to this HTML file.','warn')}${localRehearsal?notice('Local rehearsal · no automatic uploads. Download your responses at the end.','warn'):''}<label class="field" for="pid">Participant code supplied by the researcher</label><input id="pid" type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="e.g. TEST001">${introQuestionFields()}<p id="gateError" class="error-text"></p><div class="row"><button id="startStudy" ${ready?'':'disabled'}>Prepare part 1</button><button id="reviewInstructions" class="secondary">Review instructions</button></div>`);
+  flow(`<p class="breadcrumb">01 · Equipment &nbsp; / &nbsp; 02 · Practice &nbsp; / &nbsp; <strong>03 · Listen</strong></p><h1>${ready?'Begin the study':'Equipment check complete'}</h1><p>${ready?'Keep your headphones on. Rest your hands by the Space bar, locate the left arrow, and find a comfortable position. Keep your eyes closed throughout each listening section and every spoken report.':'The full study still needs its original audio, probe timing files, cues, questions, and upload destination.'}</p>${manifest?notice(`${manifest.sections.length} listening part${manifest.sections.length === 1 ? '' : 's'}, in order. Approximately ${Math.ceil(manifest.sections.reduce((sum,s)=>sum+s.probes.at(-1).effectiveProbeTime_sec,0)/60)} minutes of story, plus spoken reports and questions.`):notice('Researcher: run LPP_web.m once to add your existing stimuli to this HTML file.','warn')}${localRehearsal?notice('Local rehearsal · no automatic uploads. Download your responses at the end.','warn'):''}<p><strong>Finish each section and its questions in one sitting.</strong> Take a break after the questions, before starting the next section.</p><p>Please answer each question below. If you have read The Little Prince, two more questions will appear about your most recent reading.</p><label class="field" for="pid">Participant code supplied by the researcher</label><input id="pid" type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="e.g. TEST001">${introQuestionFields()}<p id="gateError" class="error-text"></p><div class="row"><button id="startStudy" ${ready?'':'disabled'}>Prepare part 1</button><button id="reviewInstructions" class="secondary">Review instructions</button></div>`);
+  bindIntroQuestions();
   bind('reviewInstructions', screenInstructions);
   bind('startStudy', async () => {
     const pid = $('pid').value.trim();
@@ -2210,12 +2332,11 @@ async function nextProbe() {
   reportBusy = false;
   waitRelease = held.has('Space');
   captureCycle = null;
-  await beginCapture();
+  await beginReportCapture();
   if (token !== own) return;
   state = 'reports';
   listenScreen('Give your three reports.', 'Keep your eyes closed. Recall · Attention · Sleepiness. Space after each.');
   event('recording_start', {audioContextTime: ctx.currentTime});
-  armReportTimeout();
 }
 
 async function saveProbe(result, trialStatus) {
@@ -2256,6 +2377,7 @@ async function saveProbe(result, trialStatus) {
   if (trialStatus === 'complete' && !result.partial && !session.endISO) {
     pendingEditableProbe = {trial: currentTrial, recording, result, probeIndex};
   }
+  if (currentTrial.responseTimedOut) queueUpload(recording);
   if (result.partial && trialStatus === 'complete') {
     await abortStudy('partial_audio', 'The recording was interrupted. Your saved responses remain available.');
   }
@@ -2360,7 +2482,7 @@ async function finishSection() {
     return;
   }
   state = 'break';
-  flow(`<p class="eyebrow">Part ${sectionIndex} of ${manifest.sections.length} complete</p><h1>Take a short break.</h1><p>You may keep your eyes open during the break. When you’re ready, continue to the next part of the story.</p><button id="nextPart">Prepare part ${sectionIndex+1}</button>`);
+  flow(`<p class="eyebrow">Part ${sectionIndex} of ${manifest.sections.length} complete</p><h1>Take a short break.</h1><p>You have finished this section and its comprehension questions. This is a good time to take a break, with your eyes open. Begin the next section when you can complete it and its questions in one sitting.</p><button id="nextPart">Prepare part ${sectionIndex+1}</button>`);
   bind('nextPart', prepareSection);
 }
 async function finishStudy() {
